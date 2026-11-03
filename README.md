@@ -92,10 +92,10 @@ stateDiagram-v2
 ```mermaid
 flowchart LR
     F[원본 서류 파일] --> DEK[파일마다 랜덤 DEK 생성]
-    DEK -->|AES-256-GCM| ENC[암호화된 서류]
+    DEK -->|AES-256-GCM| ENC[암호화된 서류 바이트]
     DEK -->|마스터 키로 재암호화| ENCDEK[암호화된 DEK]
-    ENC --> STORE[(비공개 Supabase Storage)]
-    ENCDEK --> STORE
+    ENC --> STORAGE[(비공개 Supabase Storage<br/>objectKey로 저장)]
+    ENCDEK --> DB[(PostgreSQL DB<br/>seller_documents.encrypted_dek 컬럼)]
 ```
 
 | 보안 요소 | 처리 방식 |
@@ -104,7 +104,8 @@ flowchart LR
 | 키 구조 | 파일별 랜덤 DEK + 마스터 키(환경변수)로 DEK 재암호화 |
 | IV | 호출마다 `SecureRandom`으로 생성, 암호문 앞에 연결 |
 | 변조 검증 | GCM 태그(128비트) |
-| 저장소 | 비공개 Supabase Storage 버킷 (`DocumentStorage`, 공개 URL 미발급) |
+| 암호화된 서류 바이트 저장 | 비공개 Supabase Storage 버킷 (`DocumentStorage`, 공개 URL 미발급), `objectKey`로 조회 |
+| 암호화된 DEK 저장 | **DB**(`seller_documents.encrypted_dek` 컬럼) — 오브젝트 스토리지가 아니라 서류 메타데이터와 같은 행에 저장 |
 | 열람 권한 | 운영자 전용, presigned URL 미사용 — 서버가 매 요청마다 복호화 + 워터마크 합성 후 응답 |
 | 열람 로그 | `SellerDocumentAccessLog`에 기록 |
 | 추가 마찰 | 프론트엔드 캡처 방지(우클릭/드래그 방지 등) |
