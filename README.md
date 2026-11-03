@@ -3,24 +3,38 @@
 > 부트캠프 최종 프로젝트, 4인 팀. 이 README는 팀원 중 **sangmin(sang9831)** 이 자신의
 > 작업을 기준으로 정리한 개인 포트폴리오용 문서다.
 
-## 프로젝트 소개
+## 한눈에 보기
 
-GRAB은 "기다림은 짧게, 기회는 단 한 번"을 컨셉으로 한 한정 수량 판매(DROP) 커머스
-서비스다. 구매자는 관심 있는 DROP을 WISH(찜)해두고 오픈 알림을 받아 구매까지
-이어가고, 판매자는 사업자 심사를 통과한 뒤 DROP을 등록·판매하고 대시보드에서
-주문·배송·재고 현황을 관리한다. 재고 동시성, 결제 연동, 실시간 재고 스트리밍(SSE)
-등 트래픽이 몰리는 "오픈 순간"을 견디는 것이 핵심 과제였다.
+| 항목 | 내용 |
+| --- | --- |
+| 서비스 | 한정 수량 판매(DROP) 커머스 — "기다림은 짧게, 기회는 단 한 번" |
+| 팀 구성 | 4인 (부트캠프 최종 프로젝트) |
+| 담당 역할 | 판매자(셀러) 도메인 백엔드 + 배포·인프라 |
+| 핵심 과제 | DROP 오픈 순간의 트래픽 폭주에도 재고 동시성 유지 |
+| 대표 성과 | 셀러 주문 조회 API 응답시간 **약 810.9ms → 59.1ms (13.7배)** |
+
+```mermaid
+flowchart LR
+    A[구매자] -->|WISH 찜 + 오픈 알림| B((DROP))
+    C[판매자] -->|사업자 심사 통과 후 등록| B
+    B -->|오픈| D[주문/결제]
+    D --> E[배송 Mock 진행]
+    E --> F[배송 완료]
+    C -->|대시보드| G[주문·배송·재고 현황 관리]
+```
 
 ## 담당 역할
 
 **판매자(셀러) 도메인 백엔드 + 배포/인프라**를 담당했다.
 
-- 판매자 등록 신청·심사(국세청 사업자등록 상태조회 연동, 서류 암호화 저장) API
-- 판매자 대시보드(요약 통계, DROP별 판매 통계, 임박 DROP) API
-- 판매자 주문·배송 조회/처리 API, 배송 단계 Mock 자동 진행
-- WISH 알림 메일(판매 임박/시작/취소) 발송
-- k6 부하테스트 설계·실행(DB 인덱스, 쿼리 합치기, 동시성 제한 등 성능 개선)
-- Nginx Blue/Green 무중단 배포 + GitHub Actions CD, Grafana/Prometheus 모니터링
+| 영역 | 작업 내용 |
+| --- | --- |
+| 판매자 심사 | 국세청 사업자등록 상태조회 연동, 서류 암호화 저장 |
+| 판매자 대시보드 | 요약 통계, DROP별 판매 통계, 임박 DROP API |
+| 주문·배송 | 판매자 주문·배송 조회/처리 API, 배송 단계 Mock 자동 진행 |
+| 알림 | WISH 알림 메일(판매 임박/시작/취소) 발송 |
+| 성능 | k6 부하테스트 설계·실행 (DB 인덱스, 쿼리 합치기, 동시성 제한) |
+| 배포·인프라 | Nginx Blue/Green 무중단 배포 + GitHub Actions CD, Grafana/Prometheus 모니터링 |
 
 ## 기술 스택
 
@@ -42,57 +56,88 @@ GRAB은 "기다림은 짧게, 기회는 단 한 번"을 컨셉으로 한 한정 
 
 ### 1. 실제 택배사 연동 없이 배송 흐름을 Mock으로 재현
 
-부트캠프 프로젝트라 실제 택배사 API로 송장번호를 발급·조회할 방법이 없었다. 그렇다고
-배송 상태를 그냥 멈춰두면 주문 흐름 전체(결제 → 배송 → 완료)를 시연·테스트할 수
-없으므로, **판매자가 입력하는 운송장 정보는 그대로 받되, 이후 상태 전이만 서버가
-스스로 흉내 내는 방식**으로 풀었다.
+**문제**: 부트캠프 프로젝트라 실제 택배사 API로 송장번호를 발급·조회할 방법이 없다.
+그렇다고 배송 상태를 멈춰두면 결제 → 배송 → 완료로 이어지는 주문 흐름 전체를
+시연·테스트할 수 없다.
 
-- 판매자는 `ShipmentRegisterRequest(carrier, trackingNumber)`로 택배사명과 송장번호를
-  직접 입력해 등록한다 — 값 자체를 실제 택배사에 조회·검증하지는 않는다.
-- `SHIPPED` 이후의 세부 단계(`COLLECTED → LINE_HAUL_OUT → LINE_HAUL_IN →
-  OUT_FOR_DELIVERY → DELIVERED`)는 `ShipmentProgressScheduler`가 일정 주기
-  (`grab.mock-delivery.poll-interval`, 기본 10초)로 깨어나 `stage-interval`
-  (기본 30초)이 지난 건들을 다음 단계로 밀어주는 방식으로 자동 진행시킨다.
-- 실제 갱신은 `ShipmentProgressBatchService`가 별도 빈으로 분리해 수행한다 — 같은
-  서비스 안에서 메서드를 호출하면(self-invocation) `@Transactional`이 프록시를
-  거치지 않아 적용되지 않는 문제가 있어, 배치 처리를 별도 빈으로 떼어 프록시를
-  타도록 구조를 나눴다.
-- 운영 결제·배송사 연동 전까지만 쓰는 기능이라는 걸 명시하기 위해 플래그
-  (`grab.mock-delivery.enabled`)로 켜고 끌 수 있게 했고, 코드에도 "실제 택배사
-  연동이 없는 부트캠프 프로젝트라 Mock으로 보여주는 단계"라고 주석을 남겼다.
+**해결**: 판매자가 입력하는 운송장 정보는 그대로 받되, 그 이후 단계 전이는 서버가
+시간 경과에 따라 스스로 진행시킨다.
+
+```mermaid
+stateDiagram-v2
+    [*] --> SHIPPED: 판매자가 carrier/trackingNumber 직접 입력
+    SHIPPED --> COLLECTED: stage-interval(30s) 경과
+    COLLECTED --> LINE_HAUL_OUT: 스케줄러 자동 전이
+    LINE_HAUL_OUT --> LINE_HAUL_IN: 스케줄러 자동 전이
+    LINE_HAUL_IN --> OUT_FOR_DELIVERY: 스케줄러 자동 전이
+    OUT_FOR_DELIVERY --> DELIVERED: 스케줄러 자동 전이
+    DELIVERED --> [*]
+```
+
+| 구성요소 | 역할 |
+| --- | --- |
+| `ShipmentRegisterRequest(carrier, trackingNumber)` | 판매자가 택배사명·송장번호를 직접 입력 (실제 택배사 조회·검증은 하지 않음) |
+| `ShipmentProgressScheduler` | `poll-interval`(기본 10초)마다 깨어나 전이 대상을 찾음 |
+| `ShipmentProgressBatchService` | 실제 단계 갱신을 별도 빈에서 트랜잭션으로 처리 |
+| `grab.mock-delivery.enabled` | 운영 택배사 연동 전까지만 켜두는 기능 플래그 |
+
+> self-invocation 문제: 같은 서비스 안에서 메서드를 호출하면 `@Transactional`이
+> 프록시를 거치지 않아 적용되지 않는다. 그래서 배치 처리(`ShipmentProgressBatchService`)를
+> 별도 빈으로 분리해 프록시를 타도록 구조를 나눴다.
 
 ### 2. 민감 서류(사업자등록증 등) 암호화 저장
 
-판매자가 제출하는 서류는 파일마다 랜덤 생성한 DEK(Data Encryption Key)로
-**AES-256-GCM** 암호화하고, 그 DEK는 환경변수로 주입한 마스터 키로 한 번 더 암호화해
-함께 저장하는 **봉투 암호화(envelope encryption)** 방식을 적용했다(`DocumentEncryptionService`).
-IV(12바이트)는 매 호출 `SecureRandom`으로 새로 생성해 암호문 앞에 이어붙이고,
-GCM 태그(128비트)로 변조 여부를 검증한다. 암호문은 비공개 Supabase Storage 버킷에
-`DocumentStorage` 인터페이스를 통해 저장하며, `ImageStorage`와 달리 공개 URL을 발급하지
-않는다.
+**봉투 암호화(envelope encryption)** 방식으로 `DocumentEncryptionService`를 구현했다.
 
-서류 열람은 운영자 전용이며, presigned URL을 내려주지 않고 매 요청마다 서버가
-복호화 + 워터마크(열람자·시각) 합성까지 끝낸 이미지 바이트를 직접 응답하는
-`SellerDocumentViewService`를 만들었고, 열람 시도를 `SellerDocumentAccessLog`에 남긴다.
-프론트엔드에는 서류 열람 토글·캡처 방지용 마찰(우클릭/드래그 방지 등)도 함께 추가했다.
+```mermaid
+flowchart LR
+    F[원본 서류 파일] --> DEK[파일마다 랜덤 DEK 생성]
+    DEK -->|AES-256-GCM| ENC[암호화된 서류]
+    DEK -->|마스터 키로 재암호화| ENCDEK[암호화된 DEK]
+    ENC --> STORE[(비공개 Supabase Storage)]
+    ENCDEK --> STORE
+```
+
+| 보안 요소 | 처리 방식 |
+| --- | --- |
+| 암호화 알고리즘 | AES-256-GCM |
+| 키 구조 | 파일별 랜덤 DEK + 마스터 키(환경변수)로 DEK 재암호화 |
+| IV | 호출마다 `SecureRandom`으로 생성, 암호문 앞에 연결 |
+| 변조 검증 | GCM 태그(128비트) |
+| 저장소 | 비공개 Supabase Storage 버킷 (`DocumentStorage`, 공개 URL 미발급) |
+| 열람 권한 | 운영자 전용, presigned URL 미사용 — 서버가 매 요청마다 복호화 + 워터마크 합성 후 응답 |
+| 열람 로그 | `SellerDocumentAccessLog`에 기록 |
+| 추가 마찰 | 프론트엔드 캡처 방지(우클릭/드래그 방지 등) |
+
+`ImageStorage`(공개 상품 이미지)와 달리 `DocumentStorage`는 공개 URL을 아예 만들지
+않는 것이 핵심 차이다. 서류 열람은 `SellerDocumentViewService`가 요청마다 복호화 +
+워터마크(열람자·시각) 합성까지 끝낸 이미지 바이트를 직접 응답한다.
 
 ### 3. k6 부하테스트 기반 성능 개선
 
-"캐시나 인덱스를 추가하기 전에 먼저 부하테스트로 병목을 확인한다"는 팀 원칙에 따라
-판매자 주문/대시보드 조회, DB 커넥션 풀 고갈, 로그인 폭주, 결제 배치 soak, PG 장애
-주입, WISH 메일 폭주, 드롭 상태 전이 배치, 배송 진행 배치 soak 등 다수의 k6 시나리오를
-설계·작성했다(`Backend/k6/`). 운영 환경(t3.small 추정)보다 열악한 t3.nano/micro
-스펙으로 제한한 로컬 Docker 환경에서 측정해, "이 정도로 약한 환경에서도 재고
-동시성이 깨지지 않는가"를 기준으로 삼았다. k6 실행 중에는 Prometheus + Grafana
-모니터링 스택(`Backend/monitoring/`)으로 백엔드 CPU/메모리/GC, HikariCP 커넥션 풀
-상태를 실시간으로 보면서 포화 시점을 대시보드로 확인했다.
+> 원칙: **캐시나 인덱스를 추가하기 전에 먼저 부하테스트로 병목을 확인한다.**
+> 운영 환경(t3.small 추정)보다 열악한 t3.nano/micro 스펙으로 제한한 로컬 Docker
+> 환경에서 측정해 "이 정도로 약한 환경에서도 재고 동시성이 깨지지 않는가"를
+> 기준으로 삼았다.
 
-대표적으로 판매자 주문 목록 조회에서 발견한 두 단계 병목을 아래 "성능 개선" 절에
-정리했다. 그 외에도 주문 생성 시 재고 잠금(lock)과 재고 증가(increase) 쿼리를
-조건부 `UPDATE ... RETURNING` 하나로 합쳐 트랜잭션의 락 보유 구간에서 DB 왕복을 1회
-줄였고(GR-202), 드롭 오픈 스파이크가 무관한 트래픽까지 느려지게 만드는 것을 막기 위해
-주문 생성 동시 실행 전역 상한(세마포어, acquire-timeout 3초 → 503 반환)을 두고
-`maxConcurrent` 값(10/15/20/100)을 바꿔가며 재측정해 20을 최적값으로 선택했다.
+| 시나리오 분류 | 예시 |
+| --- | --- |
+| 조회 부하 | 판매자 주문/대시보드 조회 |
+| 자원 고갈 | DB 커넥션 풀 고갈, 로그인 폭주 |
+| 장시간(soak) | 결제 배치 soak, 배송 진행 배치 soak |
+| 장애 주입 | PG 장애 주입 |
+| 폭주 | WISH 메일 폭주, 드롭 상태 전이 배치 |
+
+실측치는 전부 `Backend/k6/`의 각 시나리오 `result.md`에 있다(아래 "성능 개선" 절
+참고). k6 실행 중에는 Prometheus + Grafana 모니터링 스택(`Backend/monitoring/`)으로
+백엔드 CPU/메모리/GC, HikariCP 커넥션 풀 상태를 실시간으로 보면서 포화 시점을
+대시보드로 확인했다.
+
+| 개선 항목 | 내용 | 결과 |
+| --- | --- | --- |
+| 주문 생성 쿼리 합치기 (GR-202) | 재고 잠금(lock)+증가(increase) 쿼리를 조건부 `UPDATE ... RETURNING` 하나로 통합 | 락 보유 구간 DB 왕복 1회 감소 |
+| 동시 실행 전역 상한 | 주문 생성에 세마포어 적용(acquire-timeout 3초 → 503), `maxConcurrent` 10/15/20/100 비교 측정 | **20**을 최적값으로 채택 |
+| 셀러 주문 조회 (GR-191) | 아래 "성능 개선" 절 참고 | 약 **13.7배** 개선 |
 
 ## 성능 개선
 
