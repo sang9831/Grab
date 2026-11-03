@@ -55,7 +55,10 @@
 **해결**: 판매자가 입력하는 운송장 정보는 그대로 받되, 그 이후 단계 전이는 서버가
 시간 경과에 따라 스스로 진행시킨다.
 
-![배송 단계 Mock 자동 진행](./docs/diagrams/mock-delivery.png)
+판매자가 `carrier`/`trackingNumber`를 직접 입력해 `SHIPPED` 상태로 등록하면, 이후
+`COLLECTED → LINE_HAUL_OUT → LINE_HAUL_IN → OUT_FOR_DELIVERY → DELIVERED` 순서로
+`stage-interval`(기본 30초)마다 스케줄러가 자동으로 한 단계씩 전진시킨다. 택배사
+API 콜백 없이도 운영 배송 흐름과 똑같은 상태 전이를 재현하는 셈이다.
 
 | 구성요소 | 역할 |
 | --- | --- |
