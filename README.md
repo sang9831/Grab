@@ -13,15 +13,7 @@
 | 핵심 과제 | DROP 오픈 순간의 트래픽 폭주에도 재고 동시성 유지 |
 | 대표 성과 | 셀러 주문 조회 API 응답시간 **약 810.9ms → 59.1ms (13.7배)** |
 
-```mermaid
-flowchart LR
-    A[구매자] -->|WISH 찜 + 오픈 알림| B((DROP))
-    C[판매자] -->|사업자 심사 통과 후 등록| B
-    B -->|오픈| D[주문/결제]
-    D --> E[배송 Mock 진행]
-    E --> F[배송 완료]
-    C -->|대시보드| G[주문·배송·재고 현황 관리]
-```
+![GRAB 서비스 흐름](./docs/diagrams/overview.png)
 
 ## 담당 역할
 
@@ -63,16 +55,7 @@ flowchart LR
 **해결**: 판매자가 입력하는 운송장 정보는 그대로 받되, 그 이후 단계 전이는 서버가
 시간 경과에 따라 스스로 진행시킨다.
 
-```mermaid
-stateDiagram-v2
-    [*] --> SHIPPED: 판매자가 carrier/trackingNumber 직접 입력
-    SHIPPED --> COLLECTED: stage-interval(30s) 경과
-    COLLECTED --> LINE_HAUL_OUT: 스케줄러 자동 전이
-    LINE_HAUL_OUT --> LINE_HAUL_IN: 스케줄러 자동 전이
-    LINE_HAUL_IN --> OUT_FOR_DELIVERY: 스케줄러 자동 전이
-    OUT_FOR_DELIVERY --> DELIVERED: 스케줄러 자동 전이
-    DELIVERED --> [*]
-```
+![배송 단계 Mock 자동 진행](./docs/diagrams/mock-delivery.png)
 
 | 구성요소 | 역할 |
 | --- | --- |
@@ -89,14 +72,7 @@ stateDiagram-v2
 
 **봉투 암호화(envelope encryption)** 방식으로 `DocumentEncryptionService`를 구현했다.
 
-```mermaid
-flowchart LR
-    F[원본 서류 파일] --> DEK[파일마다 랜덤 DEK 생성]
-    DEK -->|AES-256-GCM| ENC[암호화된 서류 바이트]
-    DEK -->|마스터 키로 재암호화| ENCDEK[암호화된 DEK]
-    ENC --> STORAGE[(비공개 Supabase Storage<br/>objectKey로 저장)]
-    ENCDEK --> DB[(PostgreSQL DB<br/>seller_documents.encrypted_dek 컬럼)]
-```
+![서류 봉투 암호화 흐름](./docs/diagrams/document-encryption.png)
 
 | 보안 요소 | 처리 방식 |
 | --- | --- |
@@ -161,13 +137,7 @@ flowchart LR
 "본문 쿼리만 390배 빨라졌다"는 countQuery 병목을 가리는 과장된 비교였고, 두 최적화를
 모두 반영한 API 기준 개선폭인 **약 13.7배**가 실제 체감에 가까운 수치다.
 
-```mermaid
-xychart-beta
-    title "판매자 주문 목록 조회 API 추정 응답시간 (ms, 운영 RTT 반영, 로그 스케일 아님)"
-    x-axis ["적용 전", "인덱스+countQuery 수정 후"]
-    y-axis "응답시간 (ms)" 0 --> 900
-    bar [810.9, 59.1]
-```
+![판매자 주문 목록 조회 API 응답시간 개선](./docs/diagrams/order-read-perf.png)
 
 ### 평상시 조회 하한선 (캐시 없는 상태, GR-173·GR-174)
 
